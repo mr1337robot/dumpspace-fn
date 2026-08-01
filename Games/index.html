@@ -353,6 +353,17 @@
               <p>Global Search</p>
             </button>
           </li>
+          <li>
+            <button id="offset-list-compare-button" type="button"
+              class="font-semibold transition duration-200 ease-in-out hover:text-blue-500 flex items-center space-x-1">
+              <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 7h11M8 12h11M8 17h11"></path>
+                <path d="m3 7 1 1 2-2M3 12h3M3 17h3"></path>
+              </svg>
+              <p>Compare List</p>
+            </button>
+          </li>
         </ul>
         <button class="flex items-center space-x-1" id="history-updates">
           <svg
@@ -1092,6 +1103,66 @@
                 </a>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fixed inset-0 z-40 hidden items-center justify-center bg-slate-950/50 p-3 backdrop-blur-sm"
+      id="offsetListCompareDiv" role="dialog" aria-modal="true" aria-labelledby="offset-list-compare-title">
+      <div class="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-gray-50 text-black shadow-2xl dark:border-gray-600 dark:bg-gray-900 dark:text-slate-100">
+        <div class="flex items-start justify-between gap-4 border-b border-gray-200 p-5 dark:border-gray-600">
+          <div>
+            <h3 id="offset-list-compare-title" class="text-xl font-bold text-slate-900 dark:text-slate-100">Compare an offset list</h3>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Paste Class::Member names and compare their member offsets across two game builds.</p>
+          </div>
+          <button id="offset-list-compare-closer" type="button" aria-label="Close offset list comparison"
+            class="flex h-8 w-8 flex-none items-center justify-center rounded-lg p-1.5 text-gray-400 transition hover:text-blue-500">
+            <svg class="h-3 w-3" aria-hidden="true" viewBox="0 0 14 14" fill="none">
+              <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6" />
+            </svg>
+          </button>
+        </div>
+        <div class="overflow-y-auto p-5">
+          <div class="grid gap-4 md:grid-cols-2">
+            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200">Older build
+              <select id="offset-list-old-build" class="mt-1 block h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-slate-100"></select>
+            </label>
+            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200">Newer build
+              <select id="offset-list-new-build" class="mt-1 block h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-slate-100"></select>
+            </label>
+          </div>
+          <label class="mt-4 block text-sm font-semibold text-slate-700 dark:text-slate-200">Offsets to check
+            <textarea id="offset-list-input" rows="8" spellcheck="false"
+              placeholder='[&#10;  "UWorld::OwningGameInstance",&#10;  "APlayerController::AcknowledgedPawn"&#10;]'
+              class="mt-1 block w-full resize-y rounded-lg border border-gray-300 bg-white p-3 font-mono text-sm font-normal text-slate-800 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-slate-100"></textarea>
+          </label>
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <button id="offset-list-run" type="button" class="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-wait disabled:opacity-60">Compare offsets</button>
+            <p id="offset-list-status" class="text-sm text-slate-600 dark:text-slate-400"></p>
+          </div>
+          <div id="offset-list-results" class="mt-6 hidden space-y-6">
+            <section>
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-bold text-green-700 dark:text-green-400">Changed</h4>
+                <span id="offset-list-changed-count" class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-bold text-green-800 dark:bg-green-950 dark:text-green-300"></span>
+              </div>
+              <div id="offset-list-changed" class="overflow-hidden rounded-lg border border-green-200 dark:border-green-900"></div>
+            </section>
+            <section>
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-bold text-red-700 dark:text-red-400">Unchanged</h4>
+                <span id="offset-list-unchanged-count" class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-800 dark:bg-red-950 dark:text-red-300"></span>
+              </div>
+              <div id="offset-list-unchanged" class="overflow-hidden rounded-lg border border-red-200 dark:border-red-900"></div>
+            </section>
+            <section id="offset-list-missing-section" class="hidden">
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-bold text-amber-700 dark:text-amber-400">Not found in one or both builds</h4>
+                <span id="offset-list-missing-count" class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300"></span>
+              </div>
+              <div id="offset-list-missing" class="overflow-hidden rounded-lg border border-amber-200 dark:border-amber-900"></div>
+            </section>
           </div>
         </div>
       </div>

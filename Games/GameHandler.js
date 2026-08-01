@@ -2754,6 +2754,278 @@ function toggleHistoryView() {
   document.getElementById("uploadHistoryDiv").classList.add("hidden");
 }
 
+// Compare pasted Class::Member names across any two historical class dumps.
+let offsetListBuildsLoaded = false;
+const offsetListDumpCache = new Map();
+
+function formatBuildDate(dateStr) {
+  return new Date(dateStr).toLocaleString("en-US", {
+    year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+async function loadOffsetListBuilds() {
+  const oldSelect = document.getElementById("offset-list-old-build");
+  const newSelect = document.getElementById("offset-list-new-build");
+  const status = document.getElementById("offset-list-status");
+  oldSelect.disabled = true;
+  newSelect.disabled = true;
+  oldSelect.innerHTML = "<option>Loading builds…</option>";
+  newSelect.innerHTML = "<option>Loading builds…</option>";
+  status.textContent = "Loading game build history…";
+
+  const filePath = `Games/${rawDirectory}`;
+  const response = await fetch(
+    "https://api.github.com/repos/Spuckwaffel/dumpspace/commits?path=" +
+      encodeURIComponent(filePath) + "&per_page=100&sha=main",
+  );
+  if (!response.ok) {
+    throw new Error("Could not load build history (GitHub " + response.status + ").");
+  }
+
+  const commits = await response.json();
+  const builds = commits
+    .filter((commit) => commit.parents && commit.parents.length >= 2)
+    .map((commit) => ({
+      ref: commit.sha,
+      label: formatBuildDate(commit.commit.author.date) + " · " + commit.sha.slice(0, 7),
+    }));
+
+  oldSelect.innerHTML = "";
+  newSelect.innerHTML = "";
+  for (const build of [{ ref: "main", label: "Latest build (main)" }, ...builds]) {
+    for (const select of [oldSelect, newSelect]) {
+      const option = document.createElement("option");
+      option.value = build.ref;
+      option.textContent = build.label;
+      select.appendChild(option);
+    }
+  }
+
+  oldSelect.selectedIndex = builds.length > 1 ? 2 : builds.length ? 1 : 0;
+  newSelect.selectedIndex = 0;
+  oldSelect.disabled = false;
+  newSelect.disabled = false;
+  status.textContent = builds.length
+    ? `${builds.length + 1} builds available.`
+    : "Only the latest build is available.";
+  offsetListBuildsLoaded = true;
+}
+
+function parseOffsetList(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  let names;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) throw new Error("Input must be an array.");
+    names = parsed;
+  } catch (error) {
+    // Also accept one name per line and loosely formatted pasted arrays.
+    names = trimmed.split(/\r?\n/).map((line) =>
+      line.trim().replace(/^\[/, "").replace(/\]$/, "").replace(/,$/, "")
+        .replace(/^['\"]|['\"]$/g, "").trim(),
+    ).filter(Boolean);
+  }
+
+  const unique = [];
+  const seen = new Set();
+  for (const name of names) {
+    if (typeof name !== "string") continue;
+    const clean = name.trim();
+    const separator = clean.indexOf("::");
+    if (separator <= 0 || separator >= clean.length - 2) {
+      throw new Error(`Invalid entry: ${clean || "(empty)"}. Use Class::Member.`);
+    }
+    if (!seen.has(clean)) {
+      seen.add(clean);
+      unique.push(clean);
+    }
+  }
+  return unique;
+}
+
+async function loadDumpFileForBuild(ref, fileName) {
+  const url = "https://raw.githubusercontent.com/Spuckwaffel/dumpspace/" +
+    encodeURIComponent(ref) + "/Games/" + rawDirectory + fileName;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`That build does not contain ${fileName.replace("Info.json.gz", " data")}.`);
+  }
+  const decompressedStream = response.body.pipeThrough(new DecompressionStream("gzip"));
+  const text = await new Response(decompressedStream).text();
+  return JSON.parse(text);
+}
+
+function indexClassMemberOffsets(json) {
+  const index = new Map();
+  for (const classEntry of json.data || []) {
+    const className = Object.keys(classEntry)[0];
+    const members = classEntry[className];
+    if (!className || !Array.isArray(members)) continue;
+    for (const memberEntry of members) {
+      const memberName = Object.keys(memberEntry)[0];
+      if (!memberName || RESERVED_MEMBER_NAMES.has(memberName)) continue;
+      const memberData = memberEntry[memberName];
+      if (Array.isArray(memberData) && memberData.length > 1) {
+        index.set(className + "::" + memberName, memberData[1]);
+      }
+    }
+  }
+  return index;
+}
+
+async function loadMemberOffsetsForBuild(ref) {
+  if (offsetListDumpCache.has(ref)) return offsetListDumpCache.get(ref);
+  const loading = Promise.all([
+    loadDumpFileForBuild(ref, "ClassesInfo.json.gz"),
+    loadDumpFileForBuild(ref, "StructsInfo.json.gz"),
+  ]).then(([classesJson, structsJson]) => {
+    const index = indexClassMemberOffsets(classesJson);
+    for (const [name, value] of indexClassMemberOffsets(structsJson)) {
+      index.set(name, value);
+    }
+    return index;
+  });
+  offsetListDumpCache.set(ref, loading);
+  try {
+    return await loading;
+  } catch (error) {
+    offsetListDumpCache.delete(ref);
+    throw error;
+  }
+}
+
+function formatMemberOffset(value) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? "0x" + value.toString(16).toUpperCase()
+    : String(value);
+}
+
+function renderOffsetListRows(container, rows, kind) {
+  container.innerHTML = "";
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "px-4 py-3 text-sm text-slate-500 dark:text-slate-400";
+    empty.textContent = kind === "changed" ? "No offsets changed." : "No offsets stayed the same.";
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const row of rows) {
+    const line = document.createElement("div");
+    const palette = kind === "changed"
+      ? "bg-green-50/70 dark:bg-green-950/20"
+      : kind === "unchanged"
+        ? "bg-red-50/70 dark:bg-red-950/20"
+        : "bg-amber-50/70 dark:bg-amber-950/20";
+    line.className = "grid gap-1 border-b px-4 py-3 last:border-b-0 " +
+      "sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center border-gray-200 dark:border-gray-700 " + palette;
+
+    const name = document.createElement("code");
+    name.className = "break-all text-sm font-semibold text-slate-800 dark:text-slate-100";
+    name.textContent = row.name;
+    line.appendChild(name);
+
+    const values = document.createElement("code");
+    values.className = "text-sm font-bold";
+    if (kind === "changed") {
+      values.className += " text-green-700 dark:text-green-400";
+      values.textContent = `${formatMemberOffset(row.oldValue)} → ${formatMemberOffset(row.newValue)}`;
+    } else if (kind === "unchanged") {
+      values.className += " text-red-700 dark:text-red-400";
+      values.textContent = formatMemberOffset(row.oldValue);
+    } else {
+      values.className += " text-amber-700 dark:text-amber-400";
+      values.textContent = row.reason;
+    }
+    line.appendChild(values);
+    container.appendChild(line);
+  }
+}
+
+async function runOffsetListComparison() {
+  const runButton = document.getElementById("offset-list-run");
+  const status = document.getElementById("offset-list-status");
+  const results = document.getElementById("offset-list-results");
+  try {
+    const names = parseOffsetList(document.getElementById("offset-list-input").value);
+    if (!names.length) throw new Error("Paste at least one Class::Member name.");
+    const oldRef = document.getElementById("offset-list-old-build").value;
+    const newRef = document.getElementById("offset-list-new-build").value;
+    if (oldRef === newRef) throw new Error("Choose two different builds.");
+
+    runButton.disabled = true;
+    runButton.textContent = "Comparing…";
+    status.textContent = "Loading class and struct dumps for both builds…";
+    results.classList.add("hidden");
+
+    const [oldOffsets, newOffsets] = await Promise.all([
+      loadMemberOffsetsForBuild(oldRef), loadMemberOffsetsForBuild(newRef),
+    ]);
+    const changed = [];
+    const unchanged = [];
+    const missing = [];
+    for (const name of names) {
+      const hasOld = oldOffsets.has(name);
+      const hasNew = newOffsets.has(name);
+      if (!hasOld || !hasNew) {
+        missing.push({ name, reason: !hasOld && !hasNew
+          ? "Missing in both"
+          : !hasOld ? "Missing in older build" : "Missing in newer build" });
+        continue;
+      }
+      const row = { name, oldValue: oldOffsets.get(name), newValue: newOffsets.get(name) };
+      (row.oldValue === row.newValue ? unchanged : changed).push(row);
+    }
+
+    renderOffsetListRows(document.getElementById("offset-list-changed"), changed, "changed");
+    renderOffsetListRows(document.getElementById("offset-list-unchanged"), unchanged, "unchanged");
+    renderOffsetListRows(document.getElementById("offset-list-missing"), missing, "missing");
+    document.getElementById("offset-list-changed-count").textContent = changed.length;
+    document.getElementById("offset-list-unchanged-count").textContent = unchanged.length;
+    document.getElementById("offset-list-missing-count").textContent = missing.length;
+    document.getElementById("offset-list-missing-section").classList.toggle("hidden", missing.length === 0);
+    results.classList.remove("hidden");
+    status.textContent = `${names.length} unique offsets checked.`;
+  } catch (error) {
+    status.textContent = error.message;
+    showToast(error.message);
+  } finally {
+    runButton.disabled = false;
+    runButton.textContent = "Compare offsets";
+  }
+}
+
+function closeOffsetListComparison() {
+  const modal = document.getElementById("offsetListCompareDiv");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+document.getElementById("offset-list-compare-button").addEventListener("click", async function () {
+  const modal = document.getElementById("offsetListCompareDiv");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  if (!offsetListBuildsLoaded) {
+    try {
+      await loadOffsetListBuilds();
+    } catch (error) {
+      document.getElementById("offset-list-status").textContent = error.message;
+      showToast(error.message);
+    }
+  }
+});
+document.getElementById("offset-list-compare-closer").addEventListener("click", closeOffsetListComparison);
+document.getElementById("offset-list-run").addEventListener("click", runOffsetListComparison);
+document.getElementById("offsetListCompareDiv").addEventListener("click", function (event) {
+  if (event.target === this) closeOffsetListComparison();
+});
+document.addEventListener("keydown", function (event) {
+  if (event.key === "Escape") closeOffsetListComparison();
+});
+
 // ============================================================
 // DIFF MODE — compare current viewed type against an older commit
 // ============================================================
